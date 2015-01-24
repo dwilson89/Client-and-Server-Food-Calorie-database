@@ -158,6 +158,8 @@ int main(int argc, char *argv[])
 				// Send a request for a search - s will indicate it is a search
 				send(sockfd, "s", 1, 0);
 
+				printf("sending search request\n");
+
 				send(sockfd, searchTerm, SEARCHTERMLENGTH, 0);
 				int resultRetrieved = 0;
 

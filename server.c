@@ -22,6 +22,7 @@
 #include <pthread.h>
 #include <semaphore.h>
 #include <signal.h>
+#include <time.h>
 
 #define MYPORT 12345    /* the default port users will be connecting to */
 #define BACKLOG 10     /* how many pending connections queue will hold */
@@ -37,6 +38,7 @@ int keep_running = TRUE;
 //pthread_mutex_t rw_mutex;
 //pthread_mutex_t mutex;
 pthread_mutex_t q_mutex;
+pthread_mutex_t tg_mutex;
 
 sem_t rw_mutex;
 //sem_t q_mutex;
@@ -45,6 +47,8 @@ int read_count = 0;
 
 sem_t q_empty;
 sem_t q_full;
+
+int threadGlob = 0;
 
 int sockfd;
 
@@ -192,14 +196,14 @@ int AddToArray(struct CalorieEntry *newEntry, int numResults,  struct CalorieEnt
 void SearchForItem(int fd, char searchTerm[128]){
 
 	// Initialise structure pointer that will hold the search results
-	struct CalorieEntry **entryArray = NULL;
+	struct CalorieEntry **entryArray = malloc(sizeof(struct entryArray*));
 
 	// INitialise entryARray
 
-	entryArray = malloc(sizeof(struct entryArray*));
 	entryArray[0] = malloc(sizeof(struct CalorieEntry));
+	entryArray[0] = NULL;
 
-
+	// variable to keep track of number of results
 	int numResults = 0;
 
 	// Get the number of words in the search term by counting the spaces
@@ -286,8 +290,17 @@ void SearchForItem(int fd, char searchTerm[128]){
 				// Reset the food name back to it's original name
 				strcpy(calorieEntries[i]->name, originalName);
 				struct CalorieEntry temp = *calorieEntries[i];
+				
 				// Send the result to the client
-				numResults = AddToArray(&temp, numResults, entryArray);
+				// Increment number of results
+				numResults++;
+
+				// Resize entryArray to add new item and allocate memory for new item
+				entryArray = (struct CalorieEntry **)realloc(entryArray, numResults * sizeof(struct CalorieEntry*));
+				entryArray[numResults-1] = malloc(sizeof(struct CalorieEntry));
+	
+				// Add the new entry
+				*entryArray[numResults-1] = temp;
 
 				//send(fd, &temp, sizeof(temp), 0);
 				//printf("Sending item: %s\n", calorieEntries[i]->name);*/
@@ -309,13 +322,14 @@ void SearchForItem(int fd, char searchTerm[128]){
 	// than to create a new handler on the client to deal with different data types,
 	// so we create a structure that will hold the number of entries in it's weight
 	// variable as this is already an int
-	struct CalorieEntry *numEntriesStruct;
+	struct CalorieEntry *numEntriesStruct = malloc(sizeof(struct CalorieEntry));
 	strcpy(numEntriesStruct->name, "numResults");
 	numEntriesStruct->weight = numResults;
 	send(fd, numEntriesStruct, sizeof(struct CalorieEntry), 0);
 
 	for(int i = 0; i < numResults; i++){
 		send(fd, entryArray[i], sizeof(struct CalorieEntry), 0);
+		free(entryArray[i]);//free up memory
 	}
 
 	struct CalorieEntry endMessage;
@@ -323,6 +337,9 @@ void SearchForItem(int fd, char searchTerm[128]){
 	send(fd, &endMessage, sizeof(endMessage), 0);
 
 	printf("Search Complete\n");
+
+	free(numEntriesStruct);
+	free(entryArray);
 
 }
 
@@ -609,15 +626,19 @@ void UpdateAndSaveFile(){
 // Function to Grab next item from the Queue
 int GrabNextItemInQueue(){
 
-	int nextSocket = comQueue.socketQueue[comQueue.frontOfQueue];
+	printf("Grabbing front of que: %d\n", comQueue.frontOfQueue);
+
+	int frontSocket = comQueue.socketQueue[comQueue.frontOfQueue];
 
 	comQueue.socketQueue[comQueue.frontOfQueue] = NULL;
 
-	if(nextSocket != NULL){
+	if(frontSocket != NULL){
 		comQueue.frontOfQueue = (comQueue.frontOfQueue + 1) % BACKLOG;
 	}
 
-	return nextSocket;
+	printf("front socket; %d \n",frontSocket);
+
+	return frontSocket;
 }
 
 // Function to add new connections to the queue
@@ -628,6 +649,7 @@ void AddNewItemToQueue(int socket){
 	comQueue.socketQueue[comQueue.nextFreeSpot] = newSocket;
 
 	comQueue.nextFreeSpot = (comQueue.nextFreeSpot + 1) % BACKLOG;
+	printf("added new item, nextFreeSpot = %d \n", comQueue.nextFreeSpot);
 
 }
 
@@ -644,79 +666,102 @@ void* ProcessConnection(void *thread){
 
 	int is_connected = 1;
 
+	pthread_mutex_lock(&tg_mutex);
+
+	int threadNo = threadGlob;
+	threadGlob++;
+
+	pthread_mutex_unlock(&tg_mutex);
+
+	int semVals;
+
+	printf("Thread %d init \n", threadNo);
+
 	while(keep_running){ // Was 1
-
-		//printf("Thread %d grabbing Queued Item\n", (int)thread);
-
+		
+		printf("Thread %d waiting \n", threadNo);
+		
 		sem_wait(&q_full);
 		// Grab next item in queue
+		printf("Thread %d grabbing Queued Item\n", threadNo);
 		pthread_mutex_lock(&q_mutex);
 		//sem_wait(&q_mutex);
 		currentSocket = GrabNextItemInQueue();
 		//sem_post(&q_mutex);
 		pthread_mutex_unlock(&q_mutex);
+		printf("Thread %d releasing Queue\n", threadNo);
 		sem_post(&q_empty);
 
-		//printf("Thread %d grabbing Queued Item: %d\n", (int)thread, currentSocket);
+		sem_getvalue(&q_empty, &semVals);
+		printf("The value of q_empty: %d\n", semVals);
+		sem_getvalue(&q_full, &semVals);
+		printf("The value of q_full: %d\n", semVals);
 
-		if(currentSocket != NULL){
+		printf("Thread %d connected to: %d\n", threadNo,currentSocket);
+
+		is_connected = 1;
+
+		while(is_connected) { //No keep_running previously
+		
+			printf("Thread %d waiting on request\n",threadNo);
+
+			// Check the first recieved message
+			if ((numbytes=recv(currentSocket, request, 1, 0)) == -1) {
+				perror("recv");
+				exit(1);
+			}
 			
-			printf("connected to: %d\n", currentSocket);
+			request[numbytes] = '\0';
 
-			is_connected = 1;
+			printf("Request is: %s\n",request);
 
-			while(is_connected && keep_running) { //No keep_running previously
 			
-				// Check the first recieved message
-				if ((numbytes=recv(currentSocket, request, 1, 0)) == -1) {
+			// its a search request
+			if(strcmp("s", request) == 0){
+				
+				if ((numbytes=recv(currentSocket, searchTerm, SEARCHTERMLENGTH, 0)) == -1) {
 					perror("recv");
 					exit(1);
 				}
+
+				searchTerm[numbytes] = '\0';
+
+				printf("Received: %s",searchTerm);
+
+				printf("Search by thread %d\n", threadNo);
+
+				SearchForItem(currentSocket, searchTerm);
+					
+			}else if(strcmp("a", request) == 0) {// its a add new item request
 				
-				request[numbytes] = '\0';
-
-				printf("Request is: %s\n",request);
-
-				// its a search request
-				if(strcmp("s", request) == 0){
-
-					if ((numbytes=recv(currentSocket, searchTerm, SEARCHTERMLENGTH, 0)) == -1) {
-						perror("recv");
-						exit(1);
-					}
-
-					searchTerm[numbytes] = '\0';
-
-					printf("Received: %s",searchTerm);
-
-					SearchForItem(currentSocket, searchTerm);
-						
-				} else if(strcmp("a", request) == 0) {// its a add new item request
-
-					// grab the new item
-					if ((numbytes=recv(currentSocket, newItem, NEW_ITEM_LENGTH, 0)) == -1) {
-						perror("recv");
-						exit(1);
-					}
-
-					newItem[numbytes] = '\0';
-
-					printf("Received: %s",newItem);
-
-					// create a new item
-					CreateCalorieEntry(newItem, 1);
-
-					UpdateAndSaveFile();//remove this later
-
-					// Potential extension add code to send a message back for confirmation
-
-				} else if(strcmp("q", request) == 0){
-					// Close the current connection
-					close(currentSocket);
-					is_connected = 0;
+				// grab the new item
+				if ((numbytes=recv(currentSocket, newItem, NEW_ITEM_LENGTH, 0)) == -1) {
+					perror("recv");
+					exit(1);
 				}
+
+				newItem[numbytes] = '\0';
+
+				printf("Received: %s",newItem);
+
+				printf("Create new entry by thread %d\n", threadNo);
+
+				// create a new item
+				CreateCalorieEntry(newItem, 1);
+
+				UpdateAndSaveFile();//remove this later
+
+				// Potential extension add code to send a message back for confirmation
+				
+			}else if(strcmp("q", request) == 0){
+				// Close the current connection
+				close(currentSocket);
+				is_connected = 0;
 			}
+			
+			printf("Request has been processed by Thread %d \n", threadNo);
 		}
+		printf("Client %d has disconnected \n", currentSocket);
 	}
 }
 
@@ -812,6 +857,7 @@ int main(int argc, char *argv[])
 	//pthread_mutex_init(&rw_mutex, NULL);
 	//pthread_mutex_init(&mutex, NULL);
 	pthread_mutex_init(&q_mutex, NULL);
+	pthread_mutex_init(&tg_mutex, NULL);
 	sem_init(&rw_mutex,0,1); // rw_mutex - Starts at 1
 	//sem_init(&q_mutex,0,1); // q - Starts at 1
 	sem_init(&mutex,0,1); // mutex- Starts at 1
@@ -824,6 +870,7 @@ int main(int argc, char *argv[])
 	InitialiseCalarieEntries();
 	InitialiseQueue();
 
+	int semVals;
 
 	// Create a sigaction struct to handle SIGINT interrupt
 	struct sigaction sigIntHandler;
@@ -910,6 +957,10 @@ int main(int argc, char *argv[])
 		pthread_mutex_unlock(&q_mutex);
 		printf("Added to Queue\n");
 		sem_post(&q_full);
+		sem_getvalue(&q_full, &semVals);
+		printf("The value of q_full: %d\n", semVals);
+		sem_getvalue(&q_empty, &semVals);
+		printf("The value of q_empty: %d\n", semVals);
 	}
 
 	return 0;
