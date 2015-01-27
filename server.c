@@ -99,14 +99,14 @@ struct Queue comQueue;
 // Function to compare two entries in order to determine position
 int CompareItems(struct CalorieEntry * newEntry, struct CalorieEntry * oldEntry){
 
-	int compare = strcmp(newEntry->name, oldEntry->name);
+	int compare = strcasecmp(newEntry->name, oldEntry->name);
 
 	int isNewEntrySpot = 0;
 
 	//check names
 	if(compare == 0){//if equal check the next property and so forth
 
-		compare = strcmp(newEntry->measure, oldEntry->measure);
+		compare = strcasecmp(newEntry->measure, oldEntry->measure);
 
 		if(compare == 0){
 
@@ -420,7 +420,7 @@ void AddNewItemArray(struct CalorieEntry * newEntry, int isNewEntry){
 		//pthread_mutex_unlock(&rw_mutex);
 		sem_post(&rw_mutex);
 		// not sure if I need this
-		// free(tmpArray);
+		//free(tmpArray);
 		// Unlock read-write mutex
 
 	} else {
@@ -649,7 +649,6 @@ void AddNewItemToQueue(int socket){
 	comQueue.socketQueue[comQueue.nextFreeSpot] = newSocket;
 
 	comQueue.nextFreeSpot = (comQueue.nextFreeSpot + 1) % BACKLOG;
-	printf("added new item, nextFreeSpot = %d \n", comQueue.nextFreeSpot);
 
 }
 
@@ -675,7 +674,6 @@ void* ProcessConnection(void *thread){
 
 	int semVals;
 
-	printf("Thread %d init \n", threadNo);
 
 	while(keep_running){ // Was 1
 		
@@ -683,19 +681,12 @@ void* ProcessConnection(void *thread){
 		
 		sem_wait(&q_full);
 		// Grab next item in queue
-		printf("Thread %d grabbing Queued Item\n", threadNo);
 		pthread_mutex_lock(&q_mutex);
 		//sem_wait(&q_mutex);
 		currentSocket = GrabNextItemInQueue();
 		//sem_post(&q_mutex);
 		pthread_mutex_unlock(&q_mutex);
-		printf("Thread %d releasing Queue\n", threadNo);
 		sem_post(&q_empty);
-
-		sem_getvalue(&q_empty, &semVals);
-		printf("The value of q_empty: %d\n", semVals);
-		sem_getvalue(&q_full, &semVals);
-		printf("The value of q_full: %d\n", semVals);
 
 		printf("Thread %d connected to: %d\n", threadNo,currentSocket);
 
@@ -715,7 +706,6 @@ void* ProcessConnection(void *thread){
 
 			printf("Request is: %s\n",request);
 
-			
 			// its a search request
 			if(strcmp("s", request) == 0){
 				
@@ -727,8 +717,6 @@ void* ProcessConnection(void *thread){
 				searchTerm[numbytes] = '\0';
 
 				printf("Received: %s",searchTerm);
-
-				printf("Search by thread %d\n", threadNo);
 
 				SearchForItem(currentSocket, searchTerm);
 					
@@ -743,8 +731,6 @@ void* ProcessConnection(void *thread){
 				newItem[numbytes] = '\0';
 
 				printf("Received: %s",newItem);
-
-				printf("Create new entry by thread %d\n", threadNo);
 
 				// create a new item
 				CreateCalorieEntry(newItem, 1);
@@ -957,10 +943,6 @@ int main(int argc, char *argv[])
 		pthread_mutex_unlock(&q_mutex);
 		printf("Added to Queue\n");
 		sem_post(&q_full);
-		sem_getvalue(&q_full, &semVals);
-		printf("The value of q_full: %d\n", semVals);
-		sem_getvalue(&q_empty, &semVals);
-		printf("The value of q_empty: %d\n", semVals);
 	}
 
 	return 0;
